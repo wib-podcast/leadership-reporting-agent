@@ -1,0 +1,601 @@
+{
+  "name": "WIB · Leadership Reporting Agent · Architecture",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "d45fded3-1454-45d8-8326-ba948f933d37",
+      "name": "Manual showcase run",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        64,
+        464
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "triggerAtDay": [
+                1
+              ],
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "id": "fe1ced95-e21f-4e69-97c2-40b54f56b898",
+      "name": "Weekly leadership schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        64,
+        832
+      ],
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "getAll",
+        "databaseId": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "options": {}
+      },
+      "id": "c00aea63-4811-49ba-9e67-a6ea1dd0fb19",
+      "name": "Notion · Release notes",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [
+        448,
+        384
+      ],
+      "disabled": false,
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "numberInputs": 7
+      },
+      "id": "0436a774-b316-4723-ac9a-b9d0ab5e06b8",
+      "name": "Merge source records",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        704,
+        544
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Map every source item to one shape so the LLM sees comparable evidence:\n// { source, source_id, client, project, owner, observed_at, due_date, status, summary, evidence_url }\n// Source is detected from the item's fields (Merge appends all seven branches).\n// CLIENTS: list your client / project names so records get tagged. Leave empty to let the LLM infer.\nconst CLIENTS = [];\nconst win = $('Set reporting window · Last 7 days').first().json;\nconst clip = (s, n = 600) => String(s ?? '').replace(/\\s+/g, ' ').trim().slice(0, n);\nconst findClient = (...texts) => {\n  const t = texts.join(' ').toLowerCase();\n  return CLIENTS.find(c => t.includes(c.toLowerCase())) || null;\n};\nconst header = (j, name) => (j.payload?.headers || []).find(h => h.name?.toLowerCase() === name)?.value;\nconst plainProp = p => {\n  if (!p) return null;\n  if (p.title) return p.title.map(t => t.plain_text).join('');\n  if (p.rich_text) return p.rich_text.map(t => t.plain_text).join('');\n  if (p.select) return p.select?.name;\n  if (p.status) return p.status?.name;\n  if (p.date) return p.date?.start;\n  if (p.people) return p.people.map(x => x.name).join(', ');\n  return typeof p === 'string' ? p : null;\n};\n\nfunction normalize(j) {\n  // Jira issue\n  if (j.key && j.fields) {\n    const f = j.fields;\n    return { source: 'jira', source_id: j.key, project: f.project?.name, owner: f.assignee?.displayName,\n      observed_at: f.updated, due_date: f.duedate, status: f.status?.name,\n      summary: clip(`${f.summary}. ${f.issuetype?.name || ''} · priority ${f.priority?.name || 'n/a'}`),\n      evidence_url: j.self, client: findClient(f.summary, f.project?.name, (f.labels || []).join(' ')) };\n  }\n  // Gmail message\n  if (j.threadId && (j.snippet !== undefined || j.payload)) {\n    const subject = j.Subject || header(j, 'subject');\n    const from = j.From || header(j, 'from');\n    const date = j.internalDate ? new Date(Number(j.internalDate)).toISOString() : (j.Date || header(j, 'date'));\n    return { source: 'gmail', source_id: j.id, owner: from, observed_at: date, status: null,\n      summary: clip(`${subject || '(no subject)'}: ${j.snippet || j.text || ''}`),\n      evidence_url: `https://mail.google.com/mail/u/0/#all/${j.threadId}`, client: findClient(subject, j.snippet, from) };\n  }\n  // Slack message\n  if (j.ts && (j.text !== undefined)) {\n    return { source: 'slack', source_id: `${j.channel || j.channel_id || 'channel'}:${j.ts}`, owner: j.user_name || j.user,\n      observed_at: new Date(Number(j.ts) * 1000).toISOString(), status: null, summary: clip(j.text),\n      evidence_url: j.permalink || null, client: findClient(j.text) };\n  }\n  // Notion database page (release notes)\n  if (j.object === 'page' || (j.properties && j.url?.includes('notion'))) {\n    const props = j.properties || {};\n    const title = plainProp(Object.values(props).find(p => p?.title)) || j.name;\n    return { source: 'notion', source_id: j.id, owner: plainProp(props.Owner), observed_at: j.last_edited_time,\n      due_date: plainProp(props['Release date'] || props.Date), status: plainProp(props.Status),\n      summary: clip(`${title}. ${Object.entries(props).map(([k, v]) => `${k}: ${plainProp(v) ?? ''}`).join('; ')}`),\n      evidence_url: j.url, client: findClient(title, JSON.stringify(props)) };\n  }\n  // Google Drive file (PRD / FRD)\n  if (j.mimeType && (j.webViewLink || j.name)) {\n    return { source: 'drive', source_id: j.id, owner: j.owners?.[0]?.displayName, observed_at: j.modifiedTime,\n      status: null, summary: clip(`${j.name} (${j.mimeType.split('.').pop()})`), evidence_url: j.webViewLink,\n      client: findClient(j.name) };\n  }\n  // Read.ai / transcript API meeting\n  if (j.title && (j.summary || j.action_items || j.transcript)) {\n    const actions = (j.action_items || []).map(a => a.text || a).join('; ');\n    return { source: 'meetings', source_id: j.id || j.session_id, owner: j.owner?.name, observed_at: j.start_time || j.created_at,\n      status: null, summary: clip(`${j.title}. ${j.summary || ''} Actions: ${actions}`, 900),\n      evidence_url: j.report_url || j.url || null, client: findClient(j.title, j.summary) };\n  }\n  // Google Sheets tracker row (any other flat object)\n  const pick = (...keys) => keys.map(k => Object.entries(j).find(([c]) => c.toLowerCase() === k)?.[1]).find(v => v);\n  return { source: 'sheets', source_id: `row:${j.row_number ?? '?'}`, project: pick('project', 'program', 'workstream'),\n    owner: pick('owner', 'assignee', 'pm'), observed_at: pick('updated', 'last updated', 'date'),\n    due_date: pick('due', 'due date', 'eta', 'target date'), status: pick('status', 'health', 'rag'),\n    summary: clip(Object.entries(j).map(([k, v]) => `${k}: ${v}`).join('; ')), evidence_url: null,\n    client: pick('client', 'account', 'customer') || findClient(JSON.stringify(j)) };\n}\n\nconst records = $input.all().map(i => i.json).filter(j => j && Object.keys(j).length && !j.error) // skip empty or failed sources\n  .map(normalize)\n  .map(r => ({ ...r, client: r.client || null, project: r.project || null, owner: r.owner || null,\n    due_date: r.due_date || null, observed_at: r.observed_at || null }));\n\nconst bySource = records.reduce((a, r) => (a[r.source] = (a[r.source] || 0) + 1, a), {});\nreturn [{ json: { ...win, recordCount: records.length, bySource, records } }];\n"
+      },
+      "id": "4c658fa9-bae4-4bb5-adb1-c27da0ce1cf4",
+      "name": "Normalize · Map clients, owners & dates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        544
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Reporting window: {{ $json.sinceDate }} to {{ $json.untilDate }} ({{ $json.recordCount }} source records).\n\nSource records (JSON, each has source, source_id, client, project, owner, observed_at, due_date, status, summary, evidence_url):\n{{ JSON.stringify($json.records) }}\n\nReturn ONLY a JSON object, no prose, with this shape:\n{\n  \"period\": \"string\",\n  \"headline\": \"one sentence for the CEO\",\n  \"clients\": [{\"name\": \"\", \"program\": \"\", \"health\": \"ON TRACK|WATCH|AT RISK\", \"progress\": 0-100 or null, \"owner\": \"\", \"signal\": \"latest fact\", \"blocker\": \"\", \"next\": \"next step\", \"evidence\": [{\"source\": \"\", \"source_id\": \"\", \"date\": \"YYYY-MM-DD\", \"url\": \"\"}]}],\n  \"milestones\": [{\"client\": \"\", \"milestone\": \"\", \"owner\": \"\", \"start\": \"YYYY-MM-DD or null\", \"due\": \"YYYY-MM-DD or null\", \"status\": \"DONE|ON TRACK|AT RISK|LATE\", \"evidence\": []}],\n  \"releases\": [{\"feature\": \"\", \"client\": \"client or null for platform\", \"status\": \"SHIPPED|READY|IN PROGRESS|BLOCKED\", \"date\": \"\", \"evidence\": []}],\n  \"decisions_needed\": [{\"ask\": \"\", \"owner\": \"\", \"due\": \"\", \"evidence\": []}],\n  \"gaps\": [\"missing owners, dates, conflicting or stale records\"]\n}\nRules: every item must cite at least one evidence entry whose source_id is copied exactly from the records. Prefer Jira for delivery state and dates, Sheets for owners and forecasts, Notion for releases, Gmail/Slack for client signals, meeting notes for decisions. Never invent an owner, date or number: leave it null and add a gap.",
+        "options": {
+          "systemMessage": "You are a leadership reporting analyst for a product manager. You turn raw project signals into evidence-based status for leadership. Be concise and factual, judge the whole window rather than the latest message, and flag conflicting or stale records instead of smoothing them over. Output valid JSON only."
+        }
+      },
+      "id": "d35c66cb-f286-4306-8a12-3e830a66bf4e",
+      "name": "Leadership Reporting Agent · LLM synthesis",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        1232,
+        544
+      ]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "options": {}
+      },
+      "id": "2dd6af9a-ec5a-4d8f-87d0-7d25bc50a2a4",
+      "name": "OpenAI Chat Model · Add provider credentials",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        1232,
+        800
+      ],
+      "disabled": false,
+      "notes": "Provider/API credentials required before activation."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Quality gate: parse the LLM's JSON, keep only claims backed by evidence that exists\n// in the normalized records, and flag stale or missing data instead of hiding it.\nconst STALE_DAYS = 14;\nconst ctx = $('Normalize · Map clients, owners & dates').first().json;\nconst ids = new Set(ctx.records.map(r => String(r.source_id)));\nconst raw = String($input.first().json.output ?? $input.first().json.text ?? '');\nlet data;\ntry { data = JSON.parse(raw.replace(/^\\s*```(?:json)?/i, '').replace(/```\\s*$/, '').trim()); }\ncatch (e) { const m = raw.match(/\\{[\\s\\S]*\\}/); data = m ? JSON.parse(m[0]) : null; }\nif (!data) throw new Error('LLM did not return JSON. Check the agent prompt or the model.');\n\nconst gaps = [...(data.gaps || [])];\nconst rejected = [];\nconst now = new Date(ctx.until);\nconst ageDays = d => (now - new Date(d)) / 864e5;\nfunction check(kind, list, label) {\n  return (list || []).filter(x => {\n    const ev = (x.evidence || []).filter(e => ids.has(String(e.source_id)));\n    if (!ev.length) { rejected.push(`${kind}: ${label(x)} (no matching source record)`); return false; }\n    x.evidence = ev;\n    const newest = ev.map(e => e.date).filter(Boolean).sort().pop();\n    x.fresh = newest ? ageDays(newest) <= STALE_DAYS : false;\n    if (!x.fresh) gaps.push(`${kind} \"${label(x)}\" relies on evidence older than ${STALE_DAYS} days or undated.`);\n    for (const f of ['owner', 'due']) if (f in x && !x[f]) gaps.push(`${kind} \"${label(x)}\" has no ${f}.`);\n    return true;\n  });\n}\nconst report = {\n  period: data.period || `${ctx.sinceDate} → ${ctx.untilDate}`,\n  headline: data.headline || '',\n  clients: check('Client', data.clients, x => x.name),\n  milestones: check('Milestone', data.milestones, x => `${x.client} · ${x.milestone}`),\n  releases: check('Release', data.releases, x => x.feature),\n  decisions: check('Decision', data.decisions_needed, x => x.ask),\n};\nreturn [{ json: { report, gaps: [...new Set(gaps)], rejected, recordCount: ctx.recordCount, bySource: ctx.bySource,\n  generatedAt: new Date().toISOString(), passed: rejected.length === 0 } }];\n"
+      },
+      "id": "4eda4576-a003-4f95-8a8a-e6049bab7b27",
+      "name": "Quality gate · Evidence, gaps & freshness",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1504,
+        544
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Shared report helpers (repeated in each report node because n8n Code nodes can't import).\nconst { report: R, gaps, rejected, generatedAt, recordCount, bySource, passed } = $input.first().json;\nconst esc = s => String(s ?? '').replace(/[&<>\"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[c]));\nconst css = `body{font:14px Inter,Arial,sans-serif;background:#F2EFE6;color:#0E0E10;margin:0;padding:32px}main{max-width:1100px;margin:auto}\nh1{font-size:40px;margin:.2em 0}h2{margin-top:34px}.tag,.small,th{font:11px 'JetBrains Mono',monospace;letter-spacing:.08em;text-transform:uppercase;color:#5d6263}\n.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.kpi,.card{border:1px solid #D9D8CF;background:#fff8;padding:16px}.kpi b{font-size:28px;display:block}\n.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}table{border-collapse:collapse;width:100%;margin:14px 0}td,th{border-bottom:1px solid #ddd;padding:9px;text-align:left;vertical-align:top}\n.pill{padding:3px 7px;font:10px 'JetBrains Mono',monospace;background:#E3F7A0}.risk{background:#FFD3C6}.watch{background:#FFF0C6}.ev{font:10px 'JetBrains Mono',monospace;color:#747B7C}\n.callout{padding:14px 16px;background:#ECEEE1;border-left:4px solid #D4FF3A;margin:12px 0}.gaps{border-left-color:#FF5B2E}.bar{height:6px;background:#D4FF3A}\n.gantt{display:grid;gap:4px;margin:14px 0}.grow{display:grid;grid-template-columns:260px 1fr;align-items:center;gap:8px}.track{position:relative;height:22px;background:#E8E7DE}\n.seg{position:absolute;top:3px;height:16px;background:#0E0E10;color:#D4FF3A;font:10px 'JetBrains Mono',monospace;padding:0 4px;white-space:nowrap;overflow:hidden}\n.seg.risk{background:#FF5B2E;color:#fff}.seg.done{background:#9aa08f}.today{position:absolute;top:0;bottom:0;width:2px;background:#FF5B2E}\n@media(max-width:700px){.kpis,.grid{grid-template-columns:1fr}.grow{grid-template-columns:1fr}body{padding:16px}}`;\nconst cls = h => /risk|late|blocked/i.test(h) ? 'risk' : /watch/i.test(h) ? 'watch' : /done|shipped/i.test(h) ? 'done' : '';\nconst pill = h => `<span class=\"pill ${cls(h)}\">${esc(h || 'n/a')}</span>`;\nconst ev = list => (list || []).map(e => e.url ? `<a class=\"ev\" href=\"${esc(e.url)}\">${esc(e.source)} · ${esc(e.source_id)} · ${esc(e.date)}</a>` : `<span class=\"ev\">${esc(e.source)} · ${esc(e.source_id)} · ${esc(e.date)}</span>`).join('<br>');\nconst kpi = (n, l) => `<div class=\"kpi\"><b>${esc(n)}</b><span class=\"small\">${esc(l)}</span></div>`;\nconst gapBox = () => (gaps.length || rejected.length) ? `<h2>Gaps & checks</h2><div class=\"callout gaps\">${gaps.map(g => `<div>· ${esc(g)}</div>`).join('')}${rejected.map(g => `<div>✕ Dropped, unsupported: ${esc(g)}</div>`).join('')}</div>` : `<div class=\"callout\">Quality gate passed: every claim cites a source record.</div>`;\nconst page = (id, title, sub, body) => `<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>${esc(title)}</title><style>${css}</style></head><body><main>\n<div class=\"tag\">WIB ✳ LEADERSHIP REPORTING AGENT · ${esc(id)}</div><h1>${esc(title)}</h1><p>${esc(sub)} · ${esc(R.period)}</p>${R.headline ? `<div class=\"callout\"><b>Headline:</b> ${esc(R.headline)}</div>` : ''}\n${body}${gapBox()}<p class=\"small\">Generated ${esc(generatedAt)} from ${esc(recordCount)} source records (${esc(Object.entries(bySource || {}).map(([k, v]) => `${k} ${v}`).join(' · '))})</p></main></body></html>`;\nconst out = (report, filename, html, extra = {}) => [{ json: { report, filename, html, ...extra },\n  binary: { data: { data: Buffer.from(html).toString('base64'), mimeType: 'text/html', fileName: filename } } }];\nconst count = (list, re) => list.filter(x => re.test(x.health || x.status || '')).length;\n\nconst C = R.clients;\nconst rows = C.map(c => `<tr><td><b>${esc(c.name)}</b><br>${esc(c.program)}</td><td>${pill(c.health)}</td><td>${c.progress ?? '—'}${c.progress != null ? '%<div class=\"bar\" style=\"width:' + Math.min(100, c.progress) + '%\"></div>' : ''}</td><td>${esc(c.signal)}</td><td>${esc(c.blocker || '—')}</td><td>${esc(c.next || '—')}<br><span class=\"small\">${esc(c.owner || 'no owner')}</span></td><td>${ev(c.evidence)}</td></tr>`).join('');\nconst body = `<div class=\"kpis\">${kpi(C.length, 'clients')}${kpi(count(C, /on track/i), 'on track')}${kpi(count(C, /watch/i), 'watch')}${kpi(count(C, /risk/i), 'at risk')}</div>\n<h2>Portfolio</h2><table><thead><tr><th>Client</th><th>Health</th><th>Progress</th><th>Latest signal</th><th>Blocker</th><th>Next · owner</th><th>Evidence</th></tr></thead><tbody>${rows}</tbody></table>`;\nreturn out('client_status', 'client-status-report.html', page('CLIENT STATUS', 'Client-wise status report', 'Health, progress, blockers and next steps per client', body));\n"
+      },
+      "id": "d20d8bf9-703c-426c-952a-8e9f63c6d7ab",
+      "name": "Client-wise status report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1792,
+        336
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Shared report helpers (repeated in each report node because n8n Code nodes can't import).\nconst { report: R, gaps, rejected, generatedAt, recordCount, bySource, passed } = $input.first().json;\nconst esc = s => String(s ?? '').replace(/[&<>\"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[c]));\nconst css = `body{font:14px Inter,Arial,sans-serif;background:#F2EFE6;color:#0E0E10;margin:0;padding:32px}main{max-width:1100px;margin:auto}\nh1{font-size:40px;margin:.2em 0}h2{margin-top:34px}.tag,.small,th{font:11px 'JetBrains Mono',monospace;letter-spacing:.08em;text-transform:uppercase;color:#5d6263}\n.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.kpi,.card{border:1px solid #D9D8CF;background:#fff8;padding:16px}.kpi b{font-size:28px;display:block}\n.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}table{border-collapse:collapse;width:100%;margin:14px 0}td,th{border-bottom:1px solid #ddd;padding:9px;text-align:left;vertical-align:top}\n.pill{padding:3px 7px;font:10px 'JetBrains Mono',monospace;background:#E3F7A0}.risk{background:#FFD3C6}.watch{background:#FFF0C6}.ev{font:10px 'JetBrains Mono',monospace;color:#747B7C}\n.callout{padding:14px 16px;background:#ECEEE1;border-left:4px solid #D4FF3A;margin:12px 0}.gaps{border-left-color:#FF5B2E}.bar{height:6px;background:#D4FF3A}\n.gantt{display:grid;gap:4px;margin:14px 0}.grow{display:grid;grid-template-columns:260px 1fr;align-items:center;gap:8px}.track{position:relative;height:22px;background:#E8E7DE}\n.seg{position:absolute;top:3px;height:16px;background:#0E0E10;color:#D4FF3A;font:10px 'JetBrains Mono',monospace;padding:0 4px;white-space:nowrap;overflow:hidden}\n.seg.risk{background:#FF5B2E;color:#fff}.seg.done{background:#9aa08f}.today{position:absolute;top:0;bottom:0;width:2px;background:#FF5B2E}\n@media(max-width:700px){.kpis,.grid{grid-template-columns:1fr}.grow{grid-template-columns:1fr}body{padding:16px}}`;\nconst cls = h => /risk|late|blocked/i.test(h) ? 'risk' : /watch/i.test(h) ? 'watch' : /done|shipped/i.test(h) ? 'done' : '';\nconst pill = h => `<span class=\"pill ${cls(h)}\">${esc(h || 'n/a')}</span>`;\nconst ev = list => (list || []).map(e => e.url ? `<a class=\"ev\" href=\"${esc(e.url)}\">${esc(e.source)} · ${esc(e.source_id)} · ${esc(e.date)}</a>` : `<span class=\"ev\">${esc(e.source)} · ${esc(e.source_id)} · ${esc(e.date)}</span>`).join('<br>');\nconst kpi = (n, l) => `<div class=\"kpi\"><b>${esc(n)}</b><span class=\"small\">${esc(l)}</span></div>`;\nconst gapBox = () => (gaps.length || rejected.length) ? `<h2>Gaps & checks</h2><div class=\"callout gaps\">${gaps.map(g => `<div>· ${esc(g)}</div>`).join('')}${rejected.map(g => `<div>✕ Dropped, unsupported: ${esc(g)}</div>`).join('')}</div>` : `<div class=\"callout\">Quality gate passed: every claim cites a source record.</div>`;\nconst page = (id, title, sub, body) => `<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>${esc(title)}</title><style>${css}</style></head><body><main>\n<div class=\"tag\">WIB ✳ LEADERSHIP REPORTING AGENT · ${esc(id)}</div><h1>${esc(title)}</h1><p>${esc(sub)} · ${esc(R.period)}</p>${R.headline ? `<div class=\"callout\"><b>Headline:</b> ${esc(R.headline)}</div>` : ''}\n${body}${gapBox()}<p class=\"small\">Generated ${esc(generatedAt)} from ${esc(recordCount)} source records (${esc(Object.entries(bySource || {}).map(([k, v]) => `${k} ${v}`).join(' · '))})</p></main></body></html>`;\nconst out = (report, filename, html, extra = {}) => [{ json: { report, filename, html, ...extra },\n  binary: { data: { data: Buffer.from(html).toString('base64'), mimeType: 'text/html', fileName: filename } } }];\nconst count = (list, re) => list.filter(x => re.test(x.health || x.status || '')).length;\n\nconst M = R.milestones.filter(m => m.due);\nconst d = s => new Date(s).getTime();\nconst today = Date.now();\nconst lo = Math.min(today, ...M.map(m => d(m.start || m.due))) - 3 * 864e5;\nconst hi = Math.max(today, ...M.map(m => d(m.due))) + 3 * 864e5;\nconst pct = t => ((t - lo) / (hi - lo) * 100).toFixed(2);\nconst bars = M.sort((a, b) => d(a.due) - d(b.due)).map(m => { const s = d(m.start || m.due) - (m.start ? 0 : 2 * 864e5);\n  return `<div class=\"grow\"><div><b>${esc(m.client)}</b> · ${esc(m.milestone)}<br><span class=\"small\">${esc(m.owner || 'no owner')} · due ${esc(m.due)}</span></div>\n  <div class=\"track\"><div class=\"seg ${cls(m.status)}\" style=\"left:${pct(s)}%;width:${Math.max(1.5, pct(d(m.due)) - pct(s))}%\">${esc(m.status)}</div><div class=\"today\" style=\"left:${pct(today)}%\"></div></div></div>`; }).join('');\nconst ledger = M.map(m => `<tr><td>${esc(m.client)}</td><td>${esc(m.milestone)}</td><td>${esc(m.start || '—')}</td><td>${esc(m.due)}</td><td>${pill(m.status)}</td><td>${esc(m.owner || '—')}</td><td>${ev(m.evidence)}</td></tr>`).join('');\nconst undated = R.milestones.filter(m => !m.due).map(m => `${m.client} · ${m.milestone}`);\nconst body = `<div class=\"kpis\">${kpi(M.length, 'dated milestones')}${kpi(count(M, /risk|late/i), 'at risk / late')}${kpi(count(M, /done/i), 'done')}${kpi(undated.length, 'missing a date')}</div>\n<h2>Gantt · today marked in orange</h2><div class=\"gantt\">${bars || '<p>No dated milestones in this window.</p>'}</div>\n<h2>Milestone ledger</h2><table><thead><tr><th>Client</th><th>Milestone</th><th>Start</th><th>Due</th><th>Status</th><th>Owner</th><th>Evidence</th></tr></thead><tbody>${ledger}</tbody></table>\n${undated.length ? `<div class=\"callout gaps\"><b>No due date:</b> ${undated.map(esc).join(' · ')}</div>` : ''}`;\nreturn out('timeline_status', 'timeline-status-report.html', page('TIMELINE', 'Timeline-wise status report', 'Cross-project milestones on one Gantt', body));\n"
+      },
+      "id": "2b600eb3-a916-4e00-a564-da29da4151db",
+      "name": "Timeline-wise status report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1792,
+        512
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Shared report helpers (repeated in each report node because n8n Code nodes can't import).\nconst { report: R, gaps, rejected, generatedAt, recordCount, bySource, passed } = $input.first().json;\nconst esc = s => String(s ?? '').replace(/[&<>\"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[c]));\nconst css = `body{font:14px Inter,Arial,sans-serif;background:#F2EFE6;color:#0E0E10;margin:0;padding:32px}main{max-width:1100px;margin:auto}\nh1{font-size:40px;margin:.2em 0}h2{margin-top:34px}.tag,.small,th{font:11px 'JetBrains Mono',monospace;letter-spacing:.08em;text-transform:uppercase;color:#5d6263}\n.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.kpi,.card{border:1px solid #D9D8CF;background:#fff8;padding:16px}.kpi b{font-size:28px;display:block}\n.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}table{border-collapse:collapse;width:100%;margin:14px 0}td,th{border-bottom:1px solid #ddd;padding:9px;text-align:left;vertical-align:top}\n.pill{padding:3px 7px;font:10px 'JetBrains Mono',monospace;background:#E3F7A0}.risk{background:#FFD3C6}.watch{background:#FFF0C6}.ev{font:10px 'JetBrains Mono',monospace;color:#747B7C}\n.callout{padding:14px 16px;background:#ECEEE1;border-left:4px solid #D4FF3A;margin:12px 0}.gaps{border-left-color:#FF5B2E}.bar{height:6px;background:#D4FF3A}\n.gantt{display:grid;gap:4px;margin:14px 0}.grow{display:grid;grid-template-columns:260px 1fr;align-items:center;gap:8px}.track{position:relative;height:22px;background:#E8E7DE}\n.seg{position:absolute;top:3px;height:16px;background:#0E0E10;color:#D4FF3A;font:10px 'JetBrains Mono',monospace;padding:0 4px;white-space:nowrap;overflow:hidden}\n.seg.risk{background:#FF5B2E;color:#fff}.seg.done{background:#9aa08f}.today{position:absolute;top:0;bottom:0;width:2px;background:#FF5B2E}\n@media(max-width:700px){.kpis,.grid{grid-template-columns:1fr}.grow{grid-template-columns:1fr}body{padding:16px}}`;\nconst cls = h => /risk|late|blocked/i.test(h) ? 'risk' : /watch/i.test(h) ? 'watch' : /done|shipped/i.test(h) ? 'done' : '';\nconst pill = h => `<span class=\"pill ${cls(h)}\">${esc(h || 'n/a')}</span>`;\nconst ev = list => (list || []).map(e => e.url ? `<a class=\"ev\" href=\"${esc(e.url)}\">${esc(e.source)} · ${esc(e.source_id)} · ${esc(e.date)}</a>` : `<span class=\"ev\">${esc(e.source)} · ${esc(e.source_id)} · ${esc(e.date)}</span>`).join('<br>');\nconst kpi = (n, l) => `<div class=\"kpi\"><b>${esc(n)}</b><span class=\"small\">${esc(l)}</span></div>`;\nconst gapBox = () => (gaps.length || rejected.length) ? `<h2>Gaps & checks</h2><div class=\"callout gaps\">${gaps.map(g => `<div>· ${esc(g)}</div>`).join('')}${rejected.map(g => `<div>✕ Dropped, unsupported: ${esc(g)}</div>`).join('')}</div>` : `<div class=\"callout\">Quality gate passed: every claim cites a source record.</div>`;\nconst page = (id, title, sub, body) => `<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>${esc(title)}</title><style>${css}</style></head><body><main>\n<div class=\"tag\">WIB ✳ LEADERSHIP REPORTING AGENT · ${esc(id)}</div><h1>${esc(title)}</h1><p>${esc(sub)} · ${esc(R.period)}</p>${R.headline ? `<div class=\"callout\"><b>Headline:</b> ${esc(R.headline)}</div>` : ''}\n${body}${gapBox()}<p class=\"small\">Generated ${esc(generatedAt)} from ${esc(recordCount)} source records (${esc(Object.entries(bySource || {}).map(([k, v]) => `${k} ${v}`).join(' · '))})</p></main></body></html>`;\nconst out = (report, filename, html, extra = {}) => [{ json: { report, filename, html, ...extra },\n  binary: { data: { data: Buffer.from(html).toString('base64'), mimeType: 'text/html', fileName: filename } } }];\nconst count = (list, re) => list.filter(x => re.test(x.health || x.status || '')).length;\n\nconst C = R.clients, D = R.decisions, M = R.milestones;\nconst atRisk = C.filter(c => /risk|watch/i.test(c.health));\nconst body = `<div class=\"kpis\">${kpi(C.length, 'programs')}${kpi(count(C, /on track/i), 'on track')}${kpi(atRisk.length, 'need attention')}${kpi(D.length, 'decisions needed')}</div>\n<h2>Needs leadership attention</h2><table><thead><tr><th>Program</th><th>Health</th><th>Blocker</th><th>Proposed next step</th><th>Evidence</th></tr></thead><tbody>${atRisk.map(c => `<tr><td><b>${esc(c.name)}</b><br>${esc(c.program)}</td><td>${pill(c.health)}</td><td>${esc(c.blocker || '—')}</td><td>${esc(c.next || '—')}</td><td>${ev(c.evidence)}</td></tr>`).join('') || '<tr><td colspan=\"5\">Nothing at risk this week.</td></tr>'}</tbody></table>\n<h2>Decisions & asks</h2><table><thead><tr><th>Ask</th><th>Owner</th><th>By</th><th>Evidence</th></tr></thead><tbody>${D.map(x => `<tr><td>${esc(x.ask)}</td><td>${esc(x.owner || '—')}</td><td>${esc(x.due || '—')}</td><td>${ev(x.evidence)}</td></tr>`).join('')}</tbody></table>\n<h2>Deck outline</h2><ol><li>Headline and portfolio health (${count(C, /on track/i)} on track, ${atRisk.length} need attention)</li><li>Programs at risk: ${atRisk.map(c => esc(c.name)).join(', ') || 'none'}</li><li>Milestones due in the next two weeks (${M.filter(m => m.due && (new Date(m.due) - Date.now()) / 864e5 <= 14 && !/done/i.test(m.status)).length})</li><li>Decisions needed today (${D.length})</li><li>Gaps in the data</li></ol>`;\nreturn out('wsr', 'weekly-status-report.html', page('WSR', 'Weekly status review', 'Leadership summary, asks and deck outline', body));\n"
+      },
+      "id": "e97f300a-eef9-4ab8-bf4b-59573d379387",
+      "name": "WSR report + deck outline",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1792,
+        704
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Shared report helpers (repeated in each report node because n8n Code nodes can't import).\nconst { report: R, gaps, rejected, generatedAt, recordCount, bySource, passed } = $input.first().json;\nconst esc = s => String(s ?? '').replace(/[&<>\"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[c]));\nconst css = `body{font:14px Inter,Arial,sans-serif;background:#F2EFE6;color:#0E0E10;margin:0;padding:32px}main{max-width:1100px;margin:auto}\nh1{font-size:40px;margin:.2em 0}h2{margin-top:34px}.tag,.small,th{font:11px 'JetBrains Mono',monospace;letter-spacing:.08em;text-transform:uppercase;color:#5d6263}\n.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.kpi,.card{border:1px solid #D9D8CF;background:#fff8;padding:16px}.kpi b{font-size:28px;display:block}\n.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}table{border-collapse:collapse;width:100%;margin:14px 0}td,th{border-bottom:1px solid #ddd;padding:9px;text-align:left;vertical-align:top}\n.pill{padding:3px 7px;font:10px 'JetBrains Mono',monospace;background:#E3F7A0}.risk{background:#FFD3C6}.watch{background:#FFF0C6}.ev{font:10px 'JetBrains Mono',monospace;color:#747B7C}\n.callout{padding:14px 16px;background:#ECEEE1;border-left:4px solid #D4FF3A;margin:12px 0}.gaps{border-left-color:#FF5B2E}.bar{height:6px;background:#D4FF3A}\n.gantt{display:grid;gap:4px;margin:14px 0}.grow{display:grid;grid-template-columns:260px 1fr;align-items:center;gap:8px}.track{position:relative;height:22px;background:#E8E7DE}\n.seg{position:absolute;top:3px;height:16px;background:#0E0E10;color:#D4FF3A;font:10px 'JetBrains Mono',monospace;padding:0 4px;white-space:nowrap;overflow:hidden}\n.seg.risk{background:#FF5B2E;color:#fff}.seg.done{background:#9aa08f}.today{position:absolute;top:0;bottom:0;width:2px;background:#FF5B2E}\n@media(max-width:700px){.kpis,.grid{grid-template-columns:1fr}.grow{grid-template-columns:1fr}body{padding:16px}}`;\nconst cls = h => /risk|late|blocked/i.test(h) ? 'risk' : /watch/i.test(h) ? 'watch' : /done|shipped/i.test(h) ? 'done' : '';\nconst pill = h => `<span class=\"pill ${cls(h)}\">${esc(h || 'n/a')}</span>`;\nconst ev = list => (list || []).map(e => e.url ? `<a class=\"ev\" href=\"${esc(e.url)}\">${esc(e.source)} · ${esc(e.source_id)} · ${esc(e.date)}</a>` : `<span class=\"ev\">${esc(e.source)} · ${esc(e.source_id)} · ${esc(e.date)}</span>`).join('<br>');\nconst kpi = (n, l) => `<div class=\"kpi\"><b>${esc(n)}</b><span class=\"small\">${esc(l)}</span></div>`;\nconst gapBox = () => (gaps.length || rejected.length) ? `<h2>Gaps & checks</h2><div class=\"callout gaps\">${gaps.map(g => `<div>· ${esc(g)}</div>`).join('')}${rejected.map(g => `<div>✕ Dropped, unsupported: ${esc(g)}</div>`).join('')}</div>` : `<div class=\"callout\">Quality gate passed: every claim cites a source record.</div>`;\nconst page = (id, title, sub, body) => `<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>${esc(title)}</title><style>${css}</style></head><body><main>\n<div class=\"tag\">WIB ✳ LEADERSHIP REPORTING AGENT · ${esc(id)}</div><h1>${esc(title)}</h1><p>${esc(sub)} · ${esc(R.period)}</p>${R.headline ? `<div class=\"callout\"><b>Headline:</b> ${esc(R.headline)}</div>` : ''}\n${body}${gapBox()}<p class=\"small\">Generated ${esc(generatedAt)} from ${esc(recordCount)} source records (${esc(Object.entries(bySource || {}).map(([k, v]) => `${k} ${v}`).join(' · '))})</p></main></body></html>`;\nconst out = (report, filename, html, extra = {}) => [{ json: { report, filename, html, ...extra },\n  binary: { data: { data: Buffer.from(html).toString('base64'), mimeType: 'text/html', fileName: filename } } }];\nconst count = (list, re) => list.filter(x => re.test(x.health || x.status || '')).length;\n\nconst Rel = R.releases;\nconst stages = ['SHIPPED', 'READY', 'IN PROGRESS', 'BLOCKED'];\nconst funnel = stages.map(s => kpi(Rel.filter(r => (r.status || '').toUpperCase() === s).length, s.toLowerCase())).join('');\nconst byClient = [...new Set(Rel.map(r => r.client || 'Platform'))].map(c => { const rs = Rel.filter(r => (r.client || 'Platform') === c);\n  return `<article class=\"card\"><div class=\"tag\">${esc(c)}</div>${rs.map(r => `<p>${pill(r.status)} <b>${esc(r.feature)}</b> <span class=\"small\">${esc(r.date || '')}</span><br>${ev(r.evidence)}</p>`).join('')}</article>`; }).join('');\nconst body = `<h2>Demand to delivery</h2><div class=\"kpis\">${funnel}</div><h2>Feature readiness by account</h2><div class=\"grid\">${byClient || '<p>No release records this window.</p>'}</div>\n<h2>Agenda for the Product × Sales connect</h2><ol><li>What shipped and what sales can pitch now (${Rel.filter(r => /shipped|ready/i.test(r.status)).length})</li><li>Blocked features and the account impact</li><li>Accounts asking for dates: ${R.clients.filter(c => /risk|watch/i.test(c.health)).map(c => esc(c.name)).join(', ') || 'none'}</li><li>Owners and dates to confirm</li></ol>`;\nreturn out('product_sales', 'product-sales-connect.html', page('PRODUCT × SALES', 'Product × Sales connect', 'Release readiness for the sales team', body));\n"
+      },
+      "id": "17a51be5-269e-4124-a32c-e7cd8ad4e7a8",
+      "name": "Product × Sales report + deck outline",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1792,
+        880
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 01 · TRIGGERS & SOURCE SYSTEMS\nManual showcase run or weekly leadership schedule. Seven visible source connectors feed the reporting pipeline.",
+        "height": 100,
+        "width": 850,
+        "color": 5
+      },
+      "id": "5236f78b-db13-410b-a758-9f3352f3ca1b",
+      "name": "01 · TRIGGERS & SOURCE SYSTEMS",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 02 · PROCESS & AI SYNTHESIS\nMerge → normalize every source to one evidence shape → LLM returns JSON → quality gate drops claims without a matching source record and flags stale or missing owners and dates.",
+        "height": 100,
+        "width": 800,
+        "color": 6
+      },
+      "id": "83b70ff9-67e8-4f8f-8fb0-5ff586224e79",
+      "name": "02 · PROCESS & AI SYNTHESIS",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        912,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 03 · REPORTS & DECKS\nFour audience-ready branches: client, timeline, WSR, and Product × Sales.",
+        "height": 100,
+        "width": 500,
+        "color": 4
+      },
+      "id": "5c7ad5e8-705e-4a39-9c23-fd0f32115a9f",
+      "name": "03 · LEADERSHIP OUTPUTS",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1728,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Reporting window. Change DAYS for a different look-back.\nconst DAYS = 7;\nconst until = new Date();\nconst since = new Date(until.getTime() - DAYS * 864e5);\nreturn [{ json: {\n  trigger: $input.first().json,\n  windowDays: DAYS,\n  since: since.toISOString(),\n  until: until.toISOString(),\n  sinceDate: since.toISOString().slice(0, 10),\n  untilDate: until.toISOString().slice(0, 10),\n} }];\n"
+      },
+      "id": "90ec8086-6d64-48d0-9432-9b9a8742c07a",
+      "name": "Set reporting window · Last 7 days",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        544
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "returnAll": false,
+        "limit": 100,
+        "filters": {
+          "q": "=after:{{ $json.sinceDate.replaceAll(\"-\", \"/\") }}"
+        },
+        "options": {}
+      },
+      "id": "bdcd494d-f1d0-49eb-9acc-38e7a386ddfe",
+      "name": "Gmail · Client emails & dates",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        448,
+        112
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "",
+          "name": "YOUR gmailOAuth2 CREDENTIAL"
+        }
+      },
+      "disabled": false,
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "search"
+      },
+      "id": "4dce9410-dcbf-40c3-b14a-eaf72e486c6c",
+      "name": "Drive · PRDs & FRDs",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        448,
+        512
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "",
+          "name": "YOUR googleDriveOAuth2Api CREDENTIAL"
+        }
+      },
+      "disabled": false,
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        }
+      },
+      "id": "d7da2ad7-2eb3-4838-8389-fba44188e4b6",
+      "name": "Sheets · Project tracker",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        448,
+        656
+      ],
+      "disabled": false,
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "options": {}
+      },
+      "id": "4f7ae70d-dcc7-478b-a9c3-b5018d49a537",
+      "name": "Jira · Tickets & milestones",
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [
+        448,
+        784
+      ],
+      "disabled": false,
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "url": "https://api.read.ai/api/v1/meetings",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "start_time_after",
+              "value": "={{ $json.since }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "82030fb8-325f-4672-8d65-1f1607baadd8",
+      "name": "Read.ai · Meeting notes",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        448,
+        960
+      ],
+      "disabled": false,
+      "notes": "Point this at your meeting-notes provider (Read.ai, Fireflies, Circleback) and add its API credential.",
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "getAll"
+      },
+      "id": "c0d25d6b-d714-4e46-b66b-95dd071c785b",
+      "name": "Slack · Channels",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [
+        448,
+        256
+      ],
+      "disabled": false,
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    }
+  ],
+  "connections": {
+    "Manual showcase run": {
+      "main": [
+        [
+          {
+            "node": "Set reporting window · Last 7 days",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Weekly leadership schedule": {
+      "main": [
+        [
+          {
+            "node": "Set reporting window · Last 7 days",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notion · Release notes": {
+      "main": [
+        [
+          {
+            "node": "Merge source records",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Merge source records": {
+      "main": [
+        [
+          {
+            "node": "Normalize · Map clients, owners & dates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize · Map clients, owners & dates": {
+      "main": [
+        [
+          {
+            "node": "Leadership Reporting Agent · LLM synthesis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model · Add provider credentials": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Leadership Reporting Agent · LLM synthesis",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leadership Reporting Agent · LLM synthesis": {
+      "main": [
+        [
+          {
+            "node": "Quality gate · Evidence, gaps & freshness",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Quality gate · Evidence, gaps & freshness": {
+      "main": [
+        [
+          {
+            "node": "Client-wise status report",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Timeline-wise status report",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "WSR report + deck outline",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Product × Sales report + deck outline",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set reporting window · Last 7 days": {
+      "main": [
+        [
+          {
+            "node": "Gmail · Client emails & dates",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Slack · Channels",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Notion · Release notes",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Drive · PRDs & FRDs",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Sheets · Project tracker",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Jira · Tickets & milestones",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Read.ai · Meeting notes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail · Client emails & dates": {
+      "main": [
+        [
+          {
+            "node": "Merge source records",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive · PRDs & FRDs": {
+      "main": [
+        [
+          {
+            "node": "Merge source records",
+            "type": "main",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "Sheets · Project tracker": {
+      "main": [
+        [
+          {
+            "node": "Merge source records",
+            "type": "main",
+            "index": 4
+          }
+        ]
+      ]
+    },
+    "Jira · Tickets & milestones": {
+      "main": [
+        [
+          {
+            "node": "Merge source records",
+            "type": "main",
+            "index": 5
+          }
+        ]
+      ]
+    },
+    "Read.ai · Meeting notes": {
+      "main": [
+        [
+          {
+            "node": "Merge source records",
+            "type": "main",
+            "index": 6
+          }
+        ]
+      ]
+    },
+    "Slack · Channels": {
+      "main": [
+        [
+          {
+            "node": "Merge source records",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": []
+}

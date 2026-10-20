@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Leadership Reporting Agent | What I Built</title>
+<meta name="description" content="An n8n agent that turns Gmail, Slack, Notion, Drive, Sheets, Jira and meeting notes into leadership-ready status reports. From the What I Built podcast, Episode 01.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{--ink:#0E0E10;--paper:#F2EFE6;--volt:#D4FF3A;--signal:#FF5B2E;--muted:#9a9c97;--line:#2a2b2e}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ink);color:var(--paper);font:16px/1.55 Inter,Arial,sans-serif}
+main{max-width:1040px;margin:auto;padding:40px 16px 64px}
+.tag{font:12px 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:var(--volt)}
+h1{font-weight:900;font-size:clamp(34px,6vw,60px);line-height:1.02;margin:.3em 0 .25em}
+h2{font-weight:900;font-size:24px;margin:44px 0 12px}
+p.lead{color:#cfccc2;max-width:720px;font-size:18px}
+a{color:var(--volt)}
+.btns{display:flex;flex-wrap:wrap;gap:10px;margin:22px 0}
+.btn{display:inline-block;padding:11px 16px;border:1px solid var(--volt);color:var(--ink);background:var(--volt);text-decoration:none;font:500 13px 'JetBrains Mono',monospace}
+.btn.ghost{background:transparent;color:var(--volt)}
+img{width:100%;height:auto;border:1px solid var(--line);border-radius:14px;display:block}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}
+.card{border:1px solid var(--line);background:#16171a;padding:16px;border-radius:10px;text-decoration:none;color:var(--paper)}
+.card:hover{border-color:var(--volt)}
+.card b{display:block;margin-bottom:4px}
+.card span{color:var(--muted);font-size:14px}
+.cols{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.cols div{border-top:2px solid var(--volt);padding-top:10px}
+.cols h3{margin:0 0 6px;font:500 12px 'JetBrains Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--volt)}
+.cols ul{margin:0;padding-left:18px;color:#cfccc2}
+.note{border-left:3px solid var(--signal);padding:10px 14px;background:#1a1414;color:#e4d8d4;font-size:14px}
+footer{margin-top:56px;color:var(--muted);font:12px 'JetBrains Mono',monospace}
+@media(max-width:720px){.cols{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main>
+  <div class="tag">What I Built ✳ Episode 01 · Agent 01</div>
+  <h1>Leadership Reporting Agent</h1>
+  <p class="lead">An n8n workflow that reads a week of project signals from Gmail, Slack, Notion, Google Drive, Google Sheets, Jira and meeting notes, then writes four leadership-ready reports with evidence on every line.</p>
+  <div class="btns">
+    <a class="btn" href="https://github.com/wib-podcast/leadership-reporting-agent">Get the n8n workflow on GitHub</a>
+    <a class="btn ghost" href="https://github.com/wib-podcast/leadership-reporting-agent/raw/main/workflow/leadership-reporting-architecture.json">Download workflow JSON</a>
+  </div>
+
+  <img src="architecture.png" alt="Sources and project context flow into n8n processing, which produces client, timeline, WSR and Product × Sales reports">
+
+  <h2>How it works</h2>
+  <div class="cols">
+    <div><h3>Input</h3><ul><li>Gmail client threads</li><li>Slack channels</li><li>Notion release notes</li><li>Drive PRDs and FRDs</li><li>Sheets project trackers</li><li>Jira tickets and milestones</li><li>Read.ai meeting notes</li></ul></div>
+    <div><h3>Process</h3><ul><li>Pull the last 7 days from every source</li><li>Normalize each item to one evidence shape</li><li>LLM synthesizes status as JSON</li><li>Quality gate drops claims with no matching source and flags stale or missing owners and dates</li></ul></div>
+    <div><h3>Output</h3><ul><li>Client-wise status report</li><li>Timeline report with a Gantt view</li><li>Weekly status review and deck outline</li><li>Product × Sales connect brief</li></ul></div>
+  </div>
+
+  <h2>Sample reports (PDF)</h2>
+  <div class="grid">
+    <a class="card" href="specimens/wib-client-status-specimen.pdf"><b>Client status</b><span>Account health, six-month progress, risks, next-week actions</span></a>
+    <a class="card" href="specimens/wib-timeline-delivery-specimen.pdf"><b>Timeline delivery</b><span>Six-month Gantt, milestone ledger, critical path</span></a>
+    <a class="card" href="specimens/wib-weekly-status-report-specimen.pdf"><b>Weekly status review</b><span>Portfolio trend, leadership asks, deck outline</span></a>
+    <a class="card" href="specimens/wib-product-sales-connect-specimen.pdf"><b>Product × Sales connect</b><span>Demand funnel, feature readiness, agenda</span></a>
+  </div>
+
+  <h2>Straight out of the n8n workflow (HTML)</h2>
+  <div class="grid">
+    <a class="card" href="samples/client-status-report.html"><b>Client-wise status</b><span>Rendered by the Client report node</span></a>
+    <a class="card" href="samples/timeline-status-report.html"><b>Timeline + Gantt</b><span>Rendered by the Timeline report node</span></a>
+    <a class="card" href="samples/weekly-status-report.html"><b>WSR + deck outline</b><span>Rendered by the WSR node</span></a>
+    <a class="card" href="samples/product-sales-connect.html"><b>Product × Sales</b><span>Rendered by the Product × Sales node</span></a>
+    <a class="card" href="samples/showcase-client-status.html"><b>Showcase: client portfolio</b><span>From the no-credentials demo workflow</span></a>
+    <a class="card" href="samples/showcase-leadership-connect.html"><b>Showcase: leadership connect</b><span>From the no-credentials demo workflow</span></a>
+  </div>
+
+  <h2>&nbsp;</h2>
+  <p class="note">Every client, person, ticket and number on this page is invented for the podcast. No real inbox, workspace or tracker was read to make these samples.</p>
+
+  <footer>What I Built (WIB) · A Podcast for AI Builders</footer>
+</main>
+</body>
+</html>

@@ -1,0 +1,232 @@
+{
+  "metadata": {
+    "synthetic": true,
+    "period": "May-October 2026 (October month-to-date through 2026-10-20)",
+    "report_date": "2026-10-20",
+    "planning_week": {
+      "start": "2026-10-26",
+      "end": "2026-10-30"
+    },
+    "warning": "Every client, owner, ticket, metric, signal and date is invented for a podcast showcase. Never treat as actual client status."
+  },
+  "clients": [
+    {
+      "name": "Alpha",
+      "program": "Core launch",
+      "health": "ON TRACK",
+      "progress": 88,
+      "owner": "Iris Lee",
+      "signal": "API contract signed; pilot scope locked.",
+      "blocker": "Partner certification window is not confirmed.",
+      "ticket": "WIB-ALP-214",
+      "next": "Confirm pilot acceptance criteria and book certification slot.",
+      "trend": [
+        20,
+        34,
+        47,
+        61,
+        75,
+        88
+      ]
+    },
+    {
+      "name": "Lotus",
+      "program": "Payments refresh",
+      "health": "AT RISK",
+      "progress": 76,
+      "owner": "Victor Chen",
+      "signal": "Webhook contract tests are ready for sandbox.",
+      "blocker": "Gateway sandbox access remains with partner team.",
+      "ticket": "WIB-LOT-087",
+      "next": "Escalate sandbox access; run first end-to-end payment test.",
+      "trend": [
+        15,
+        27,
+        40,
+        54,
+        67,
+        76
+      ]
+    },
+    {
+      "name": "Pearl",
+      "program": "Member portal",
+      "health": "ON TRACK",
+      "progress": 93,
+      "owner": "Priya Shah",
+      "signal": "Core flows passed; release candidate is stable.",
+      "blocker": "Accessibility sign-off is pending on the revised focus order.",
+      "ticket": "WIB-PEA-153",
+      "next": "Close accessibility review and confirm release checklist.",
+      "trend": [
+        23,
+        37,
+        52,
+        66,
+        81,
+        93
+      ]
+    },
+    {
+      "name": "Cedar",
+      "program": "Analytics migration",
+      "health": "WATCH",
+      "progress": 82,
+      "owner": "Omar Reed",
+      "signal": "Parity checks pass on 94% of sampled rows.",
+      "blocker": "Legacy export exceptions need a signed acceptance threshold.",
+      "ticket": "WIB-CED-066",
+      "next": "Review exception sample and sign off the parity threshold.",
+      "trend": [
+        18,
+        31,
+        45,
+        59,
+        72,
+        82
+      ]
+    },
+    {
+      "name": "Nova",
+      "program": "Mobile onboarding",
+      "health": "ON TRACK",
+      "progress": 94,
+      "owner": "Ella Park",
+      "signal": "Demo experiment shows an 8-point completion lift.",
+      "blocker": "Rollout guardrails need Product and Sales agreement.",
+      "ticket": "WIB-NOV-072",
+      "next": "Approve rollout guardrails and stage the first 50% cohort.",
+      "trend": [
+        21,
+        36,
+        52,
+        68,
+        83,
+        94
+      ]
+    },
+    {
+      "name": "Ember",
+      "program": "CRM consolidation",
+      "health": "AT RISK",
+      "progress": 73,
+      "owner": "Jamie Fox",
+      "signal": "Target CRM field map is drafted.",
+      "blocker": "Two source systems have no named data owner.",
+      "ticket": "WIB-EMB-033",
+      "next": "Name source owners and confirm a migration rehearsal date.",
+      "trend": [
+        12,
+        24,
+        38,
+        51,
+        64,
+        73
+      ]
+    }
+  ],
+  "monthly_health_counts": [
+    {
+      "month": "MAY",
+      "on_track": 5,
+      "watch": 1,
+      "at_risk": 0
+    },
+    {
+      "month": "JUN",
+      "on_track": 4,
+      "watch": 2,
+      "at_risk": 0
+    },
+    {
+      "month": "JUL",
+      "on_track": 3,
+      "watch": 2,
+      "at_risk": 1
+    },
+    {
+      "month": "AUG",
+      "on_track": 3,
+      "watch": 1,
+      "at_risk": 2
+    },
+    {
+      "month": "SEP",
+      "on_track": 3,
+      "watch": 1,
+      "at_risk": 2
+    },
+    {
+      "month": "OCT*",
+      "on_track": 3,
+      "watch": 1,
+      "at_risk": 2
+    }
+  ],
+  "actions": [
+    {
+      "ticket": "WIB-LOT-087",
+      "action": "Secure gateway sandbox access",
+      "owner": "Victor Chen",
+      "due": "26 Oct",
+      "state": "BLOCKED"
+    },
+    {
+      "ticket": "WIB-EMB-033",
+      "action": "Name two CRM source owners",
+      "owner": "Jamie Fox",
+      "due": "26 Oct",
+      "state": "OPEN"
+    },
+    {
+      "ticket": "WIB-NOV-072",
+      "action": "Approve 50% rollout guardrails",
+      "owner": "Ella Park",
+      "due": "27 Oct",
+      "state": "DECISION"
+    },
+    {
+      "ticket": "WIB-CED-066",
+      "action": "Sign data-parity threshold",
+      "owner": "Omar Reed",
+      "due": "28 Oct",
+      "state": "OPEN"
+    },
+    {
+      "ticket": "WIB-PEA-153",
+      "action": "Close accessibility sign-off",
+      "owner": "Priya Shah",
+      "due": "29 Oct",
+      "state": "IN REVIEW"
+    },
+    {
+      "ticket": "WIB-ALP-214",
+      "action": "Book partner certification slot",
+      "owner": "Iris Lee",
+      "due": "30 Oct",
+      "state": "OPEN"
+    }
+  ],
+  "product_sales_funnel": [
+    {
+      "stage": "Requests",
+      "count": 12
+    },
+    {
+      "stage": "Qualified",
+      "count": 6
+    },
+    {
+      "stage": "Solution fit",
+      "count": 4
+    },
+    {
+      "stage": "Pilot-ready",
+      "count": 3
+    },
+    {
+      "stage": "Shipped",
+      "count": 2
+    }
+  ]
+}
